@@ -3,68 +3,121 @@
     <header class="page-head">
       <div>
         <h2>分析笔记管理</h2>
-        <p class="page-desc">记录数据分析过程中的发现和结论，支持关联数据集和标签分类。</p>
+        <p class="page-desc">
+          笔记与标签化数据集联动：按频次检索时读取同一份完整版本，标签名称、使用频次、最后使用时间都能回到标签分类逐项核对。
+        </p>
       </div>
       <div class="page-actions">
-        <button class="btn primary" type="button" @click="openCreate">登记笔记条目</button>
+        <button class="btn" type="button" @click="reload">刷新标签频次</button>
         <button class="btn" type="button" @click="exportRows">导出分析笔记清单</button>
       </div>
     </header>
 
+    <p v-if="feed" class="banner" :class="bannerClass">
+      <strong>标签化数据集 v{{ feed.version }}</strong>
+      <span>{{ feed.notice }}</span>
+      <span class="banner-meta">
+        指纹 {{ feed.checksum }} · 发布 {{ feed.publishedAt }}
+      </span>
+    </p>
+
     <div class="stat-row">
-      <article v-for="item in stats" :key="item.label" class="stat-card">
+      <article v-for="item in statCards" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
         <strong class="stat-value">{{ item.value }}</strong>
       </article>
     </div>
 
-    <p class="status-legend">
-      <span v-for="item in statusSummary" :key="item.status" class="legend-item">
-        {{ item.status }}：{{ item.count }}
-      </span>
-    </p>
-
-    <form class="filter-bar" @submit.prevent="reload">
-      <label v-for="field in filterFields" :key="field" class="filter-item">
-        <span>{{ field }}</span>
-        <input v-model="filters[field]" :placeholder="`按${field}检索`" />
+    <div class="toolbar">
+      <label class="toolbar-item">
+        <span>按笔记标题 / 标签 / 数据集检索</span>
+        <input v-model="keyword" placeholder="例如：口径复核 或 DS-ORDER-DAILY" />
       </label>
-      <button class="btn" type="submit">查询</button>
-      <button class="btn ghost" type="button" @click="resetFilters">重置条件</button>
-    </form>
+      <span class="muted">
+        排序依据：笔记关联标签中的最高使用频次（同频次按最近使用时间）
+      </span>
+    </div>
 
+    <h3 class="section-title">笔记列表（按最高频次排序）</h3>
     <table class="data-table">
       <thead>
         <tr>
-          <th v-for="column in columns" :key="column">{{ column }}</th>
-          <th>当前状态</th>
+          <th>笔记编号</th>
+          <th>笔记标题</th>
+          <th>关联数据集</th>
+          <th>标签（名称 / 频次 / 最后使用）</th>
+          <th>最高频次</th>
+          <th>最近使用</th>
+          <th>状态</th>
           <th>可执行动作</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="row in rows" :key="String(row.id)">
-          <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
-          <td>{{ row.status }}</td>
+        <tr v-for="note in noteRows" :key="note.noteId">
+          <td>{{ note.noteCode }}</td>
+          <td>{{ note.title }}</td>
+          <td>{{ note.datasetId }}</td>
+          <td>
+            <span v-for="tag in note.tags" :key="tag.tagCode" class="tag-chip">
+              {{ tag.tagName }} · {{ tag.frequency }} 次 · {{ tag.lastUsed || '未使用' }}
+            </span>
+            <span v-if="!note.tags.length" class="muted">无标签</span>
+          </td>
+          <td>{{ note.maxFrequency }}</td>
+          <td>{{ note.latestDetailAt || note.latestLastUsed || '—' }}</td>
+          <td>{{ note.status }}</td>
           <td class="row-actions">
             <button
               v-for="action in actions"
               :key="action"
               class="link"
               type="button"
-              @click="runAction(action, row)"
+              @click="runAction(action, note.noteId)"
             >
               {{ action }}
             </button>
           </td>
         </tr>
-        <tr v-if="!rows.length">
-          <td :colspan="columns.length + 2" class="empty-state">暂无分析笔记数据，可先登记笔记条目</td>
+        <tr v-if="!noteRows.length">
+          <td colspan="8" class="empty-state">没有匹配的分析笔记</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 class="section-title">标签频次（同一份标签化数据集）</h3>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>标签名称</th>
+          <th>使用频次</th>
+          <th>最后使用</th>
+          <th>使用明细</th>
+          <th>数据集</th>
+          <th>核对</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="row in tagRows" :key="row.tagCode">
+          <td>{{ row.tagName }}</td>
+          <td>{{ row.frequency }}</td>
+          <td>{{ row.lastUsed || '—' }}</td>
+          <td>{{ row.detailCount }} 条</td>
+          <td>{{ row.datasetIds.join('、') || '—' }}</td>
+          <td>
+            <RouterLink class="link" to="/taggroup">回查标签分类</RouterLink>
+          </td>
+        </tr>
+        <tr v-if="!tagRows.length">
+          <td colspan="6" class="empty-state">标签化数据集还没有标签</td>
         </tr>
       </tbody>
     </table>
 
     <footer class="page-foot">
-      <span>共 {{ total }} 条分析笔记记录</span>
+      <span>
+        共 {{ noteRows.length }} 条笔记 · 标签化数据集 v{{ feed?.version ?? '—' }}
+        <template v-if="feed?.noteStale"> · 笔记表单有变更，等待重算后刷新标签视图</template>
+      </span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
     </footer>
   </section>
@@ -73,48 +126,72 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
-import {
-  downloadEntries,
-  listEntries,
-  moduleMeta,
-  runAction as applyAction,
-} from '@/api/local-service'
-import type { EntryRow } from '@/data/types'
+import { downloadEntries, moduleMeta, runAction as applyAction } from '@/api/local-service'
+import { loadAnalysisNoteFeed } from '@/api/tag-service'
+import type { AnalysisNoteFeed } from '@/data/tag-types'
 
 const meta = moduleMeta('analysisnote')
-const columns = ["笔记编号", "笔记标题", "关联数据集", "分析发现", "图表截图", "标签分类", "创建时间", "协作人列表"]
-const actions = ["提交编写", "发布笔记", "归档笔记"]
-const statuses = ["草稿", "编写中", "已发布", "已归档"]
-const stats = [{"label": "笔记条目总数", "value": 0}, {"label": "已发布笔记", "value": 0}, {"label": "编写中笔记", "value": 0}]
-
-const rows = ref<EntryRow[]>([])
-const total = ref(0)
+const actions = meta.actions
+const feed = ref<AnalysisNoteFeed | null>(null)
+const keyword = ref('')
 const errorMessage = ref('')
-const filters = ref<Record<string, string>>({})
-const filterFields = columns.slice(0, 3)
-const statusSummary = computed(() =>
-  statuses.map((status: string) => ({
-    status,
-    count: rows.value.filter((row) => String(row.status) === status).length,
-  })),
-)
 
-function resetFilters() {
-  filters.value = {}
-  reload()
-}
+const statCards = computed(() => {
+  const current = feed.value
+  if (!current) {
+    return []
+  }
+  return [
+    { label: '笔记条目', value: current.rows.length },
+    { label: '标签数', value: current.totals.tags },
+    { label: '有效关系', value: current.totals.relations },
+    { label: '总使用频次', value: current.totals.frequency },
+    { label: '待重算标签', value: current.pendingChanges },
+  ]
+})
 
-function exportRows() {
-  downloadEntries(meta.key)
-}
+const noteRows = computed(() => {
+  const rows = feed.value?.rows ?? []
+  const text = keyword.value.trim()
+  if (!text) {
+    return rows
+  }
+  return rows.filter(
+    (row) =>
+      row.title.includes(text) ||
+      row.noteCode.includes(text) ||
+      row.datasetId.includes(text) ||
+      row.tags.some((tag) => tag.tagName.includes(text) || tag.tagCode.includes(text)),
+  )
+})
 
-function openCreate() {
-  errorMessage.value = '笔记条目登记入口尚未接入审批流'
-}
+const tagRows = computed(() => {
+  const rows = feed.value?.tags ?? []
+  const text = keyword.value.trim()
+  if (!text) {
+    return rows
+  }
+  return rows.filter(
+    (row) => row.tagName.includes(text) || row.datasetIds.some((item) => item.includes(text)),
+  )
+})
 
-function runAction(action: string, row: EntryRow) {
-  errorMessage.value = ''
-  const result = applyAction(meta.key, Number(row.id), action)
+const bannerClass = computed(() => {
+  const current = feed.value
+  if (!current) {
+    return ''
+  }
+  if (current.interrupted) {
+    return 'banner-warn'
+  }
+  if (current.building || current.pendingChanges > 0) {
+    return 'banner-info'
+  }
+  return 'banner-ok'
+})
+
+function runAction(action: string, id: number) {
+  const result = applyAction(meta.key, id, action)
   if (!result.ok) {
     errorMessage.value = result.message
     return
@@ -122,12 +199,14 @@ function runAction(action: string, row: EntryRow) {
   reload()
 }
 
+function exportRows() {
+  downloadEntries(meta.key)
+}
+
 function reload() {
   errorMessage.value = ''
   try {
-    const payload = listEntries(meta.key, filters.value)
-    rows.value = payload.items
-    total.value = payload.total
+    feed.value = loadAnalysisNoteFeed()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '分析笔记列表读取失败'
   }
@@ -135,3 +214,23 @@ function reload() {
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.banner {
+  display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center;
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  background: #fff; font-size: 13px; margin: 0 0 12px;
+}
+.banner-ok { border-left: 4px solid #0f9d58; }
+.banner-info { border-left: 4px solid #1f6feb; }
+.banner-warn { border-left: 4px solid #b42318; background: #fff8f7; }
+.banner-meta { color: var(--muted); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 10px; }
+.toolbar-item span { display: block; font-size: 12px; color: var(--muted); }
+.section-title { font-size: 14px; margin: 18px 0 8px; }
+.muted { color: var(--muted); font-size: 12px; }
+.tag-chip {
+  display: inline-block; margin: 2px 4px 2px 0; padding: 2px 8px;
+  border-radius: 999px; background: #eef2f7; font-size: 12px;
+}
+</style>
